@@ -1,0 +1,11 @@
+<p>
+  <label><%= l(:label_redmineflux_mcp_server_url) %></label>
+  <%= text_field_tag 'settings[server_url]', @settings['server_url'], size: 60, placeholder: 'https://redmine.example.com' %>
+  <em class="info"><%= l(:text_redmineflux_mcp_server_url_hint) %></em>
+</p>
+
+<p>
+  <label><%= l(:label_redmineflux_mcp_jwt_secret) %></label>
+  <%= password_field_tag 'settings[jwt_secret]', @settings['jwt_secret'], size: 60, autocomplete: 'off' %>
+  <em class="info"><%= l(:text_redmineflux_mcp_jwt_secret_hint) %></em>
+</p>

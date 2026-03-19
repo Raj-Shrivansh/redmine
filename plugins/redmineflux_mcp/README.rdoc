@@ -1,0 +1,60 @@
+= redmineflux_mcp
+
+Redmineflux MCP turns your Redmine instance into a ready-to-use MCP server for Claude Desktop.
+
+== What You Get
+
+- Plug-and-play MCP server script inside the plugin
+- Redmine auth bridge endpoint (`/mcp/auth/login`) for username/password login
+- Broad tool coverage for Redmine API resources:
+  - Issues (list/get/create/update/delete, notes, relations)
+  - Projects (list/get/create/update/delete)
+  - Users & groups (list/get/create/update/delete where allowed)
+  - Time entries (list/get/create/update/delete)
+  - Memberships, versions, wiki pages, project news/files/documents
+  - Metadata (trackers, statuses, priorities, roles, queries, custom fields)
+  - Generic `redmine_api_request` for advanced endpoints
+
+== Install
+
+1. Install plugin gems and Node dependencies:
+
+  cd plugins/redmineflux_mcp/mcp-server
+  npm install
+
+2. Restart Redmine.
+
+3. (Optional) Configure plugin settings in Redmine admin:
+- `Administration` -> `Plugins` -> `Redmineflux MCP plugin` -> `Configure`
+- Set `Redmine URL` override if needed
+- Set custom JWT secret for `/mcp/auth/login` if you don't want Rails secret fallback
+
+== Claude Desktop Config
+
+Use the generated JSON from:
+- `Administration` -> `AI MCP`
+
+Or use this template:
+
+  {
+    "mcpServers": {
+      "redmineflux": {
+        "command": "/absolute/path/to/redmine/plugins/redmineflux_mcp/mcp-server/run-server.sh",
+        "env": {
+          "REDMINE_URL": "http://127.0.0.1:3000"
+        }
+      }
+    }
+  }
+
+Then, in Claude chat, call `login_redmine` once with your Redmine username/password.
+This avoids hardcoding API key in config.
+
+Optional: if you prefer key-based auth, add:
+- `REDMINE_API_KEY`
+
+== Notes
+
+- Username/password login via `login_redmine` is the recommended default setup.
+- Tool permissions still follow Redmine user permissions.
+- For special operations not covered by dedicated tools, use `redmine_api_request`.

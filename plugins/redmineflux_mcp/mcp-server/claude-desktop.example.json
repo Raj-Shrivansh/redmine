@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "redmineflux": {
+      "command": "/absolute/path/to/redmine/plugins/redmineflux_mcp/mcp-server/run-server.sh",
+      "env": {
+        "REDMINE_URL": "http://127.0.0.1:3000"
+      }
+    }
+  }
+}
