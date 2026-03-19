@@ -23,7 +23,7 @@ gem "doorkeeper", "~> 5.8.2"
 gem "bcrypt", require: false
 gem "doorkeeper-i18n", "~> 5.2"
 gem "requestjs-rails", "~> 0.0.13"
-
+gem 'puma'
 #  Ruby Standard Gems
 gem 'csv', '~> 3.3.2'
 gem 'net-imap', '~> 0.5.7'
