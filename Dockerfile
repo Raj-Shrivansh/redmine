@@ -7,18 +7,14 @@ RUN apt-get update -qq && apt-get install -y \
   libpq-dev \
   imagemagick \
   git \
-  curl \
-  gnupg
+  curl
 
 # Install Node.js (LTS)
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && apt-get install -y nodejs
 
-# Install Yarn (official method)
-RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - \
-  && echo "deb https://dl.yarnpkg.com/debian/ stable main" > /etc/apt/sources.list.d/yarn.list \
-  && apt-get update -qq \
-  && apt-get install -y yarn
+# Enable Yarn via Corepack (modern way)
+RUN corepack enable && corepack prepare yarn@stable --activate
 
 # Set working directory
 WORKDIR /usr/src/redmine
@@ -28,7 +24,10 @@ COPY Gemfile Gemfile.lock ./
 
 # Install bundler & gems
 RUN gem install bundler -v 2.4.22
-RUN bundle install --without development test
+
+# Configure bundler (NEW way)
+RUN bundle config set without 'development test' \
+  && bundle install
 
 # Copy full Redmine code
 COPY . .
