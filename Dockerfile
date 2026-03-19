@@ -24,7 +24,10 @@ COPY Gemfile Gemfile.lock ./
 
 # Install bundler & gems
 RUN gem install bundler -v 2.4.22
-RUN bundle install --without development test
+
+# Configure bundler (NEW way)
+RUN bundle config set without 'development test' \
+  && bundle install
 
 # Copy full Redmine code
 COPY . .
