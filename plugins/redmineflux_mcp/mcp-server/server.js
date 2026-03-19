@@ -24,7 +24,10 @@ const REDMINE_PROXY_URL = asStringOrNull(process.env.REDMINE_PROXY_URL)
 
 const baseApiKey = asStringOrNull(process.env.REDMINE_API_KEY)
 const baseUsername = asStringOrNull(process.env.REDMINE_USERNAME)
-const sharedSession = createSessionState()
+const sharedSession = createSessionState({
+    apiKey: baseApiKey,
+    username: baseUsername
+})
 const sessionStates = new Map()
 const requestContextStore = new AsyncLocalStorage()
 
@@ -63,12 +66,12 @@ function resolveTransportMode() {
     return process.env.PORT ? "http" : "stdio"
 }
 
-function createSessionState() {
+function createSessionState(seed = {}) {
     return {
-        apiKey: baseApiKey,
-        username: baseUsername,
-        accessToken: null,
-        autoLoginAttempted: false
+        apiKey: asStringOrNull(seed.apiKey),
+        username: asStringOrNull(seed.username),
+        accessToken: asStringOrNull(seed.accessToken),
+        autoLoginAttempted: Boolean(seed.autoLoginAttempted)
     }
 }
 
@@ -79,7 +82,8 @@ function sessionFor(extra) {
     }
 
     if (!sessionStates.has(sessionId)) {
-        sessionStates.set(sessionId, createSessionState())
+        // Copy currently known auth into new sessions so reconnects stay authenticated.
+        sessionStates.set(sessionId, createSessionState(sharedSession))
     }
 
     return sessionStates.get(sessionId)
@@ -87,6 +91,27 @@ function sessionFor(extra) {
 
 function currentSession() {
     return sessionFor(requestContextStore.getStore())
+}
+
+function rememberSessionAuth(session) {
+    sharedSession.apiKey = asStringOrNull(session.apiKey)
+    sharedSession.username = asStringOrNull(session.username)
+    sharedSession.accessToken = asStringOrNull(session.accessToken)
+    if (sharedSession.apiKey) {
+        sharedSession.autoLoginAttempted = true
+    }
+}
+
+function hydrateSessionFromShared(session) {
+    if (!session || session.apiKey || !sharedSession.apiKey) {
+        return false
+    }
+
+    session.apiKey = sharedSession.apiKey
+    session.username = sharedSession.username
+    session.accessToken = sharedSession.accessToken
+    session.autoLoginAttempted = true
+    return true
 }
 
 function normalizeBaseUrl(url) {
@@ -169,11 +194,13 @@ async function loginWithCredentials(username, password) {
     session.apiKey = apiKey
     session.accessToken = asStringOrNull(response.data?.access_token)
     session.username = username
+    rememberSessionAuth(session)
 }
 
 async function ensureAuthenticated() {
     const session = currentSession()
     if (session.apiKey) return
+    if (hydrateSessionFromShared(session)) return
 
     if (!session.autoLoginAttempted) {
         session.autoLoginAttempted = true
@@ -288,9 +315,11 @@ defineTool(
         session.apiKey = asStringOrNull(args.api_key)
         session.username = asStringOrNull(args.username)
         session.accessToken = null
+        session.autoLoginAttempted = true
         if (!session.apiKey) {
             throw new Error("api_key cannot be blank")
         }
+        rememberSessionAuth(session)
         return responseText("API key has been stored for this MCP session.")
     }
 )
