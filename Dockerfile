@@ -16,31 +16,29 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Set working directory
 WORKDIR /usr/src/redmine
 
-# Copy FULL project first (important)
+# Copy FULL project
 COPY . .
 
-# Install correct bundler version
+# Install bundler
 RUN gem install bundler:2.4.22
 ENV BUNDLER_VERSION=2.4.22
 
-# Install gems (after full code)
+# Install gems
 RUN bundle config set without 'development test' \
   && bundle install
 
-# Install MCP server dependencies
+# Install MCP dependencies
 WORKDIR /usr/src/redmine/plugins/redmineflux_mcp/mcp-server
 RUN npm install
 
-# Back to Redmine root
+# Back to root
 WORKDIR /usr/src/redmine
 
-# Expose port
+# Make script executable (important)
+RUN chmod +x /usr/src/redmine/docker/start-redmine-mcp.sh
+
+# Expose port (Render uses this)
 EXPOSE 3000
 
-# Start app (ALL runtime tasks here)
-CMD bash -c "\
-  bundle exec rake generate_secret_token && \
-  bundle exec rake db:migrate RAILS_ENV=production && \
-  bundle exec rake redmine:plugins:migrate RAILS_ENV=production && \
-  bundle exec rake assets:precompile RAILS_ENV=production && \
-  bundle exec rails server -b 0.0.0.0 -p 3000"
+# 🚀 Start BOTH Redmine + MCP
+CMD ["/usr/src/redmine/docker/start-redmine-mcp.sh"]

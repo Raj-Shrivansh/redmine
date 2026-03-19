@@ -1,22 +1,32 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
+import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js"
 import {
     CallToolRequestSchema,
-    ListToolsRequestSchema
+    ListToolsRequestSchema,
+    isInitializeRequest
 } from "@modelcontextprotocol/sdk/types.js"
+import { randomUUID } from "node:crypto"
+import { AsyncLocalStorage } from "node:async_hooks"
 import axios from "axios"
+import { createProxyMiddleware } from "http-proxy-middleware"
 
 const REDMINE_URL = normalizeBaseUrl(process.env.REDMINE_URL || "http://127.0.0.1:3000")
 const LOGIN_PATH = process.env.REDMINE_MCP_LOGIN_PATH || "/mcp/auth/login"
 const REQUEST_TIMEOUT_MS = toPositiveInteger(process.env.REDMINE_TIMEOUT_MS, 20000)
 const DEFAULT_LIMIT = toPositiveInteger(process.env.REDMINE_DEFAULT_LIMIT, 25)
+const TRANSPORT_MODE = resolveTransportMode()
+const HTTP_PORT = toPositiveInteger(process.env.PORT || process.env.MCP_PORT, 3000)
+const HTTP_HOST = asStringOrNull(process.env.MCP_HOST) || "0.0.0.0"
+const HTTP_PATH = process.env.MCP_HTTP_PATH || "/mcp"
+const REDMINE_PROXY_URL = asStringOrNull(process.env.REDMINE_PROXY_URL)
 
-const session = {
-    apiKey: asStringOrNull(process.env.REDMINE_API_KEY),
-    username: asStringOrNull(process.env.REDMINE_USERNAME),
-    accessToken: null,
-    autoLoginAttempted: false
-}
+const baseApiKey = asStringOrNull(process.env.REDMINE_API_KEY)
+const baseUsername = asStringOrNull(process.env.REDMINE_USERNAME)
+const sharedSession = createSessionState()
+const sessionStates = new Map()
+const requestContextStore = new AsyncLocalStorage()
 
 const redmineClient = axios.create({
     timeout: REQUEST_TIMEOUT_MS,
@@ -24,23 +34,13 @@ const redmineClient = axios.create({
 })
 
 console.error(`[redmineflux-mcp] Starting MCP server for ${REDMINE_URL}`)
-if (session.apiKey) {
+if (sharedSession.apiKey) {
     console.error("[redmineflux-mcp] Auth mode: REDMINE_API_KEY")
-} else if (session.username && process.env.REDMINE_PASSWORD) {
+} else if (sharedSession.username && process.env.REDMINE_PASSWORD) {
     console.error("[redmineflux-mcp] Auth mode: REDMINE_USERNAME/REDMINE_PASSWORD (auto login)")
 } else {
     console.error("[redmineflux-mcp] Auth mode: interactive login_redmine or set REDMINE_API_KEY")
 }
-
-const server = new Server(
-    {
-        name: "redmineflux-mcp",
-        version: "1.1.0"
-    },
-    {
-        capabilities: { tools: {} }
-    }
-)
 
 const tools = []
 
@@ -52,6 +52,41 @@ function asStringOrNull(value) {
     if (typeof value !== "string") return null
     const trimmed = value.trim()
     return trimmed.length ? trimmed : null
+}
+
+function resolveTransportMode() {
+    const explicit = asStringOrNull(process.env.MCP_TRANSPORT)
+    if (explicit) return explicit.toLowerCase()
+
+    // Deployment platforms (Render/Heroku/etc.) inject PORT for web processes.
+    // Default to HTTP in that case, otherwise keep local stdio behavior.
+    return process.env.PORT ? "http" : "stdio"
+}
+
+function createSessionState() {
+    return {
+        apiKey: baseApiKey,
+        username: baseUsername,
+        accessToken: null,
+        autoLoginAttempted: false
+    }
+}
+
+function sessionFor(extra) {
+    const sessionId = extra?.sessionId
+    if (!sessionId) {
+        return sharedSession
+    }
+
+    if (!sessionStates.has(sessionId)) {
+        sessionStates.set(sessionId, createSessionState())
+    }
+
+    return sessionStates.get(sessionId)
+}
+
+function currentSession() {
+    return sessionFor(requestContextStore.getStore())
 }
 
 function normalizeBaseUrl(url) {
@@ -107,6 +142,7 @@ function extractErrorMessage(response) {
 }
 
 function buildAuthHeaders() {
+    const session = currentSession()
     const headers = { Accept: "application/json" }
     if (session.apiKey) {
         headers["X-Redmine-API-Key"] = session.apiKey
@@ -115,6 +151,7 @@ function buildAuthHeaders() {
 }
 
 async function loginWithCredentials(username, password) {
+    const session = currentSession()
     const url = `${REDMINE_URL}${LOGIN_PATH.startsWith("/") ? LOGIN_PATH : `/${LOGIN_PATH}`}`
     const response = await redmineClient.post(url, { username, password }, {
         headers: { "Content-Type": "application/json", Accept: "application/json" }
@@ -135,6 +172,7 @@ async function loginWithCredentials(username, password) {
 }
 
 async function ensureAuthenticated() {
+    const session = currentSession()
     if (session.apiKey) return
 
     if (!session.autoLoginAttempted) {
@@ -229,6 +267,7 @@ defineTool(
     },
     async (args) => {
         await loginWithCredentials(args.username, args.password)
+        const session = currentSession()
         return responseText(`Authenticated as ${session.username}. API key is now active for this MCP session.`)
     }
 )
@@ -245,6 +284,7 @@ defineTool(
         required: ["api_key"]
     },
     async (args) => {
+        const session = currentSession()
         session.apiKey = asStringOrNull(args.api_key)
         session.username = asStringOrNull(args.username)
         session.accessToken = null
@@ -1599,37 +1639,189 @@ defineTool(
     }
 )
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-        tools: tools.map(({ name, description, inputSchema }) => ({
-            name,
-            description,
-            inputSchema
-        }))
+function createServerInstance() {
+    const server = new Server(
+        {
+            name: "redmineflux-mcp",
+            version: "1.1.0"
+        },
+        {
+            capabilities: { tools: {} }
+        }
+    )
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
+        return {
+            tools: tools.map(({ name, description, inputSchema }) => ({
+                name,
+                description,
+                inputSchema
+            }))
+        }
+    })
+
+    server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+        const { name, arguments: args = {} } = request.params
+        const tool = tools.find((entry) => entry.name === name)
+
+        if (!tool) {
+            throw new Error(`Unknown tool: ${name}`)
+        }
+
+        return await requestContextStore.run(extra || {}, async () => {
+            try {
+                return await tool.handler(args, extra)
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error)
+                console.error(`[redmineflux-mcp] ${name} failed: ${message}`)
+                return responseJson({ ok: false, error: message, tool: name })
+            }
+        })
+    })
+
+    return server
+}
+
+function extractSessionIdHeader(req) {
+    const rawHeader = req.headers["mcp-session-id"]
+    if (Array.isArray(rawHeader)) {
+        return rawHeader[0]
     }
-})
+    return typeof rawHeader === "string" ? rawHeader : undefined
+}
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args = {} } = request.params
-    const tool = tools.find((entry) => entry.name === name)
+function sendJsonRpcError(res, status, message, code = -32000) {
+    res.status(status).json({
+        jsonrpc: "2.0",
+        error: {
+            code,
+            message
+        },
+        id: null
+    })
+}
 
-    if (!tool) {
-        throw new Error(`Unknown tool: ${name}`)
-    }
-
-    try {
-        return await tool.handler(args)
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error(`[redmineflux-mcp] ${name} failed: ${message}`)
-        return responseJson({ ok: false, error: message, tool: name })
-    }
-})
-
-async function start() {
+async function startStdio() {
+    const server = createServerInstance()
     const transport = new StdioServerTransport()
     await server.connect(transport)
-    console.error(`[redmineflux-mcp] MCP server ready with ${tools.length} tools.`)
+    console.error(`[redmineflux-mcp] MCP server ready with ${tools.length} tools (stdio mode).`)
+}
+
+async function createHttpSession(sessions) {
+    const server = createServerInstance()
+    let createdSessionId = null
+
+    const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sessionId) => {
+            createdSessionId = sessionId
+            sessions.set(sessionId, { transport, server })
+        }
+    })
+
+    transport.onclose = () => {
+        if (createdSessionId) {
+            sessions.delete(createdSessionId)
+            sessionStates.delete(createdSessionId)
+        }
+    }
+
+    await server.connect(transport)
+    return transport
+}
+
+async function startHttp() {
+    const app = createMcpExpressApp({ host: HTTP_HOST })
+    const sessions = new Map()
+
+    app.get("/health", (_req, res) => {
+        res.json({
+            ok: true,
+            name: "redmineflux-mcp",
+            mode: "http",
+            redmine_url: REDMINE_URL
+        })
+    })
+
+    app.all(HTTP_PATH, async (req, res) => {
+        try {
+            if (req.method === "POST" && !req.is("application/json")) {
+                sendJsonRpcError(res, 415, "Unsupported content type. Use application/json.")
+                return
+            }
+
+            const sessionId = extractSessionIdHeader(req)
+            let transport
+
+            if (sessionId) {
+                const existing = sessions.get(sessionId)
+                if (!existing) {
+                    sendJsonRpcError(res, 404, "Session not found")
+                    return
+                }
+                transport = existing.transport
+            } else {
+                const isInitialize = req.method === "POST" && isInitializeRequest(req.body)
+                if (!isInitialize) {
+                    sendJsonRpcError(res, 400, "No valid session ID provided")
+                    return
+                }
+                transport = await createHttpSession(sessions)
+            }
+
+            await transport.handleRequest(req, res, req.body)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            console.error(`[redmineflux-mcp] HTTP transport error: ${message}`)
+            if (!res.headersSent) {
+                sendJsonRpcError(res, 500, "Internal server error", -32603)
+            }
+        }
+    })
+
+    if (REDMINE_PROXY_URL) {
+        console.error(`[redmineflux-mcp] Proxy mode enabled. Forwarding non-MCP routes to ${REDMINE_PROXY_URL}`)
+
+        const redmineProxy = createProxyMiddleware({
+            target: REDMINE_PROXY_URL,
+            changeOrigin: true,
+            ws: true,
+            xfwd: true,
+            proxyTimeout: REQUEST_TIMEOUT_MS,
+            onError: (error, _req, res) => {
+                const response = res
+                if (!response.headersSent) {
+                    response.status(502).json({
+                        error: "bad_gateway",
+                        message: `Redmine upstream proxy error: ${error.message}`
+                    })
+                }
+            }
+        })
+
+        app.use("/", redmineProxy)
+    }
+
+    await new Promise((resolve, reject) => {
+        const listener = app.listen(HTTP_PORT, HTTP_HOST, () => {
+            console.error(
+                `[redmineflux-mcp] MCP server ready with ${tools.length} tools (http mode) on ${HTTP_HOST}:${HTTP_PORT}${HTTP_PATH}`
+            )
+            resolve()
+        })
+
+        listener.on("error", reject)
+    })
+}
+
+async function start() {
+    if (TRANSPORT_MODE === "http" || TRANSPORT_MODE === "streamable-http") {
+        await startHttp()
+        return
+    }
+
+    await startStdio()
 }
 
 start().catch((error) => {
