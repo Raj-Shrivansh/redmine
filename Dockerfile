@@ -40,8 +40,6 @@ WORKDIR /usr/src/redmine
 # Generate secret token (required)
 RUN bundle exec rake generate_secret_token
 
-# Precompile assets
-RUN RAILS_ENV=production bundle exec rake assets:precompile
 
 # Expose port
 EXPOSE 3000
@@ -50,4 +48,5 @@ EXPOSE 3000
 CMD bash -c "\
   bundle exec rake db:migrate RAILS_ENV=production && \
   bundle exec rake redmine:plugins:migrate RAILS_ENV=production && \
+  bundle exec rake assets:precompile RAILS_ENV=production && \
   bundle exec rails server -b 0.0.0.0 -p 3000"
