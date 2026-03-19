@@ -24,6 +24,11 @@ RUN bundle install --without development test
 # Copy full Redmine code
 COPY . .
 
+WORKDIR /usr/src/redmine/plugins/redmineflux_mcp/mcp-server
+RUN npm install
+
+# Back to root
+WORKDIR /usr/src/redmine
 # Generate secret token (required)
 RUN bundle exec rake generate_secret_token
 
