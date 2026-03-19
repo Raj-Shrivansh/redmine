@@ -1,4 +1,4 @@
-# Use official Ruby image (compatible with Redmine 5.x)
+# Use official Ruby image
 FROM ruby:3.2
 
 # Install system dependencies
@@ -13,39 +13,33 @@ RUN apt-get update -qq && apt-get install -y \
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && apt-get install -y nodejs
 
-# Enable Yarn via Corepack (modern way)
-RUN corepack enable && corepack prepare yarn@stable --activate
-
 # Set working directory
 WORKDIR /usr/src/redmine
 
-# Copy Gemfile first (for caching)
-COPY Gemfile Gemfile.lock ./
+# Copy FULL project first (important)
+COPY . .
 
-# Install bundler & gems
-RUN gem install bundler -v 2.4.22
+# Install correct bundler version
+RUN gem install bundler:2.4.22
+ENV BUNDLER_VERSION=2.4.22
 
-# Configure bundler (NEW way)
+# Install gems (after full code)
 RUN bundle config set without 'development test' \
   && bundle install
 
-# Copy full Redmine code
-COPY . .
-
+# Install MCP server dependencies
 WORKDIR /usr/src/redmine/plugins/redmineflux_mcp/mcp-server
 RUN npm install
 
-# Back to root
+# Back to Redmine root
 WORKDIR /usr/src/redmine
-# Generate secret token (required)
-RUN bundle exec rake generate_secret_token
-
 
 # Expose port
 EXPOSE 3000
 
-# Start command (with DB + plugin migrations)
+# Start app (ALL runtime tasks here)
 CMD bash -c "\
+  bundle exec rake generate_secret_token && \
   bundle exec rake db:migrate RAILS_ENV=production && \
   bundle exec rake redmine:plugins:migrate RAILS_ENV=production && \
   bundle exec rake assets:precompile RAILS_ENV=production && \
