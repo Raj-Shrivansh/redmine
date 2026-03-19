@@ -41,8 +41,6 @@
 *.rbc
 
 /.bundle
-/Gemfile.lock
-/Gemfile.local
 
 /node_modules
 yarn-error.log
