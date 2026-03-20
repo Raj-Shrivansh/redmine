@@ -34,11 +34,28 @@ RUN npm install
 # Back to root
 WORKDIR /usr/src/redmine
 
-# Make script executable (important)
+# Make script executable
 RUN chmod +x /usr/src/redmine/docker/start-redmine-mcp.sh
 
-# Expose port (Render uses this)
+# Expose port
 EXPOSE 3000
 
-# 🚀 Start BOTH Redmine + MCP
+# Runtime env vars — override these in your docker run / docker-compose / Render dashboard
+# Redmine config
+ENV RAILS_ENV=production
+ENV PORT=3000
+ENV RAILS_INTERNAL_PORT=3001
+
+# MCP config
+ENV MCP_TRANSPORT=http
+ENV MCP_HTTP_PATH=/mcp
+
+# OAuth 2.0 — set these at runtime, NOT here (they contain secrets)
+# OAUTH_CLIENT_ID=       <-- set in Render / docker-compose env
+# OAUTH_CLIENT_SECRET=   <-- set in Render / docker-compose env
+# MCP_PUBLIC_URL=        <-- e.g. https://your-app.onrender.com
+
+# Fallback (if not using OAuth)
+# REDMINE_API_KEY=       <-- set at runtime if needed
+
 CMD ["/usr/src/redmine/docker/start-redmine-mcp.sh"]
