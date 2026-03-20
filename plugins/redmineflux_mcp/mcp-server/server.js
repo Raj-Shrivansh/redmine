@@ -1014,17 +1014,44 @@ async function startHttp() {
 
     // ------------------------------------------------------------------
     // Optional Redmine proxy
+    // IMPORTANT: must explicitly exclude all MCP-owned routes so the proxy
+    // never intercepts /.well-known/oauth-authorization-server, /oauth/*,
+    // /health, or the MCP endpoint itself.
     // ------------------------------------------------------------------
     if (REDMINE_PROXY_URL) {
         console.error(`[redmineflux-mcp] Proxy → ${REDMINE_PROXY_URL}`)
-        app.use("/", createProxyMiddleware({
-            target: REDMINE_PROXY_URL,
-            changeOrigin: true, ws: true, xfwd: true,
-            proxyTimeout: REQUEST_TIMEOUT_MS,
-            onError: (err, _req, res) => {
-                if (!res.headersSent) res.status(502).json({ error: "bad_gateway", message: err.message })
+
+        // Routes handled by this MCP server — never forward these to Redmine
+        const MCP_OWNED_PREFIXES = [
+            "/.well-known",
+            "/oauth/callback",
+            "/health",
+            HTTP_PATH
+        ]
+
+        const shouldProxy = (pathname) =>
+            !MCP_OWNED_PREFIXES.some(prefix => pathname === prefix || pathname.startsWith(prefix + "/"))
+
+        app.use("/", (req, res, next) => {
+            if (!shouldProxy(req.path)) {
+                // This path belongs to the MCP server — let Express handle it
+                return next()
             }
-        }))
+
+            // Forward everything else to Redmine
+            createProxyMiddleware({
+                target: REDMINE_PROXY_URL,
+                changeOrigin: true,
+                ws: true,
+                xfwd: true,
+                proxyTimeout: REQUEST_TIMEOUT_MS,
+                onError: (err, _req, res) => {
+                    if (!res.headersSent) {
+                        res.status(502).json({ error: "bad_gateway", message: err.message })
+                    }
+                }
+            })(req, res, next)
+        })
     }
 
     await new Promise((resolve, reject) => {
