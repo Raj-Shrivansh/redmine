@@ -16,29 +16,31 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Set working directory
 WORKDIR /usr/src/redmine
 
-# Copy FULL project
+# Copy full project
 COPY . .
 
 # Install bundler
 RUN gem install bundler:2.4.22
 ENV BUNDLER_VERSION=2.4.22
 
-# Install gems
+# Install Redmine gems
 RUN bundle config set without 'development test' \
   && bundle install
 
-# Install MCP dependencies
-WORKDIR /usr/src/redmine/plugins/redmineflux_mcp/mcp-server
-RUN npm install
+# Build MCP server (TypeScript -> dist)
+WORKDIR /usr/src/redmine/mcp-redmine-oauth-js
+RUN npm ci \
+  && npm run build \
+  && npm prune --omit=dev
 
 # Back to root
 WORKDIR /usr/src/redmine
 
-# Make script executable (important)
+# Make start script executable
 RUN chmod +x /usr/src/redmine/docker/start-redmine-mcp.sh
 
-# Expose port (Render uses this)
+# Railway public port
 EXPOSE 3000
 
-# 🚀 Start BOTH Redmine + MCP
+# Start both Redmine + MCP
 CMD ["/usr/src/redmine/docker/start-redmine-mcp.sh"]
