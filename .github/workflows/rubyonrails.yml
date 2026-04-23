@@ -28,27 +28,28 @@ jobs:
           ruby-version: 3.2
           bundler-cache: true
 
-      - name: Install SQLite package
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsqlite3-dev
+      - name: Install SQLite
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
-      - name: Configure test database
-        run: |
-          cp config/database.yml.example config/database.yml
-
-      - name: Simulate queue load
-        run: sleep 180
+      - name: Configure database
+        run: cp config/database.yml.example config/database.yml
 
       - name: Generate secret token
-        run: |
-          bundle exec rake generate_secret_token
+        run: bundle exec rake generate_secret_token
 
       - name: Prepare database
-        run: |
-          bundle exec rake db:create
-          bundle exec rake db:migrate
+        run: bundle exec rails db:prepare
 
       - name: Run tests
-        run: |
-          bundle exec rake test
+        run: bundle exec rake test
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-artifacts
+          path: |
+            log/
+            tmp/
+            coverage/
+            test/reports/
