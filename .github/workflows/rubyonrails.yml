@@ -5,6 +5,11 @@ on:
     branches:
       - "**"
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-queue-demo
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -31,6 +36,9 @@ jobs:
       - name: Configure test database
         run: |
           cp config/database.yml.example config/database.yml
+
+      - name: Simulate queue load
+        run: sleep 180
 
       - name: Generate secret token
         run: |
