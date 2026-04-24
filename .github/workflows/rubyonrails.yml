@@ -7,24 +7,43 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-queue-demo
-  cancel-in-progress: false
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: redmine
+          POSTGRES_PASSWORD: redmine
+          POSTGRES_DB: redmine_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U redmine -d redmine_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     env:
       RAILS_ENV: test
+      REDMINE_DB_DATABASE: redmine_test
+      REDMINE_DB_HOST: 127.0.0.1
+      REDMINE_DB_USERNAME: redmine
+      REDMINE_DB_PASSWORD: redmine
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 🧠 Ensure lockfile works on Linux (fails fast if not fixed)
       - name: Check Gemfile.lock platform
         run: |
-          if ! grep -q "x86_64-linux" Gemfile.lock; then
+          if [ -f Gemfile.lock ] && ! grep -q "x86_64-linux" Gemfile.lock; then
             echo "❌ Gemfile.lock missing x86_64-linux platform"
             echo "Run locally: bundle lock --add-platform x86_64-linux"
             exit 1
@@ -39,11 +58,21 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsqlite3-dev
+          sudo apt-get install -y libpq-dev
 
       - name: Configure database
         run: |
-          cp config/database.yml.example config/database.yml
+          mkdir -p config
+          cat > config/database.yml <<'YAML'
+          test:
+            adapter: postgresql
+            encoding: unicode
+            database: redmine_test
+            host: 127.0.0.1
+            username: redmine
+            password: redmine
+            pool: 5
+          YAML
 
       - name: Generate secret token
         run: bundle exec rake generate_secret_token
