@@ -52,7 +52,125 @@ jobs:
         run: bundle exec rails db:prepare
 
       - name: Run tests
-        run: bundle exec rake test
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p tmp/test-results
+          bundle exec rake test 2>&1 | tee tmp/test-results/test.log
+          TEST_EXIT=${PIPESTATUS[0]}
+          echo "${TEST_EXIT}" > tmp/test-results/test-exit-code
+          exit "${TEST_EXIT}"
+
+      - name: Build JUnit XML from test log
+        if: always()
+        run: |
+          ruby <<'RUBY'
+          require 'cgi'
+
+          log_path = 'tmp/test-results/test.log'
+          out_path = 'tmp/test-results/test.junit.xml'
+          exit_code_path = 'tmp/test-results/test-exit-code'
+
+          log = File.exist?(log_path) ? File.read(log_path) : ''
+          lines = log.lines.map(&:chomp)
+          test_exit = File.exist?(exit_code_path) ? File.read(exit_code_path).to_i : 1
+
+          cases = []
+          i = 0
+          while i < lines.length
+            marker = lines[i].strip
+            if marker == 'Failure:' || marker == 'Error:'
+              kind = marker.delete(':').downcase
+              i += 1
+              i += 1 while i < lines.length && lines[i].strip.empty?
+              header = (i < lines.length ? lines[i].strip : 'unknown_test')
+              class_name, test_name = if (m = header.match(/\A([^#\s]+)#([^\s]+)/))
+                                        [m[1], m[2]]
+                                      else
+                                        ['UnknownTestCase', "case_#{cases.length + 1}"]
+                                      end
+
+              details = []
+              i += 1
+              while i < lines.length
+                next_marker = lines[i].strip
+                break if next_marker == 'Failure:' || next_marker == 'Error:'
+                break if lines[i].start_with?('bin/rails test ')
+                details << lines[i]
+                i += 1
+              end
+
+              cases << {
+                class_name: CGI.escapeHTML(class_name),
+                test_name: CGI.escapeHTML(test_name),
+                kind: kind,
+                message: CGI.escapeHTML(header[0, 500]),
+                details: CGI.escapeHTML(details.join("\n")[0, 10_000])
+              }
+              next
+            end
+            i += 1
+          end
+
+          failures = cases.count { |c| c[:kind] == 'failure' }
+          errors = cases.count { |c| c[:kind] == 'error' }
+
+          if cases.empty?
+            status_name = test_exit.zero? ? 'suite_passed' : 'suite_failed_without_parsed_cases'
+            cases << {
+              class_name: 'GitHubActions',
+              test_name: CGI.escapeHTML(status_name),
+              kind: (test_exit.zero? ? nil : 'error'),
+              message: CGI.escapeHTML("exit_code=#{test_exit}"),
+              details: CGI.escapeHTML(log[-10_000..] || '')
+            }
+            errors = 1 unless test_exit.zero?
+          end
+
+          xml = +"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+          xml << "<testsuite name=\"redmine\" tests=\"#{cases.length}\" failures=\"#{failures}\" errors=\"#{errors}\">\n"
+          cases.each do |c|
+            xml << "  <testcase classname=\"#{c[:class_name]}\" name=\"#{c[:test_name]}\">"
+            if c[:kind]
+              tag = c[:kind] == 'failure' ? 'failure' : 'error'
+              xml << "<#{tag} message=\"#{c[:message]}\">#{c[:details]}</#{tag}>"
+            end
+            xml << "</testcase>\n"
+          end
+          xml << "</testsuite>\n"
+
+          File.write(out_path, xml)
+          puts "Generated #{out_path} with #{cases.length} testcase nodes"
+          RUBY
+
+      - name: Upload JUnit to Redmineflux DevOps
+        if: always()
+        env:
+          REDMINE_URL: ${{ secrets.REDMINE_URL }}
+          DEVOPS_PROJECT_ID: ${{ secrets.DEVOPS_PROJECT_ID }}
+          DEVOPS_WEBHOOK_SECRET: ${{ secrets.DEVOPS_WEBHOOK_SECRET }}
+          BUILD_EXTERNAL_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+        run: |
+          JUNIT_FILE="tmp/test-results/test.junit.xml"
+          if [ -z "${REDMINE_URL}" ] || [ -z "${DEVOPS_PROJECT_ID}" ] || [ -z "${DEVOPS_WEBHOOK_SECRET}" ]; then
+            echo "Skipping Redmine test-results upload: missing REDMINE_URL/DEVOPS_PROJECT_ID/DEVOPS_WEBHOOK_SECRET secrets."
+            exit 0
+          fi
+          if [ ! -s "${JUNIT_FILE}" ]; then
+            echo "Skipping Redmine test-results upload: ${JUNIT_FILE} not found."
+            exit 0
+          fi
+
+          XML_B64="$(base64 -w0 "${JUNIT_FILE}")"
+          BODY="$(jq -n --arg id "${BUILD_EXTERNAL_ID}" --arg xml "${XML_B64}" '{build_external_id:$id,junit_xml_base64:$xml}')"
+          SIG="sha256=$(printf '%s' "${BODY}" | openssl dgst -sha256 -hmac "${DEVOPS_WEBHOOK_SECRET}" -hex | sed 's/^.* //')"
+
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature-256: ${SIG}" \
+            -d "${BODY}" \
+            "${REDMINE_URL}/devops/webhook/github/${DEVOPS_PROJECT_ID}/test_results"
 
       # 📦 Always upload artifacts (even if tests fail)
       - name: Upload artifacts
@@ -65,3 +183,4 @@ jobs:
             tmp/
             coverage/
             test/reports/
+            tmp/test-results/
