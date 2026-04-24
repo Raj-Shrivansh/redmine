@@ -189,13 +189,28 @@ jobs:
           XML_B64="$(base64 -w0 "${JUNIT_FILE}")"
           BODY="$(jq -n --arg id "${BUILD_EXTERNAL_ID}" --arg xml "${XML_B64}" '{build_external_id:$id,junit_xml_base64:$xml}')"
           SIG="sha256=$(printf '%s' "${BODY}" | openssl dgst -sha256 -hmac "${DEVOPS_WEBHOOK_SECRET}" -hex | sed 's/^.* //')"
-
-          curl --fail --show-error --silent \
+          RESP_FILE="tmp/test-results/devops-upload-response.json"
+          HTTP_CODE="$(curl --show-error --silent \
+            -o "${RESP_FILE}" \
+            -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
             -H "X-Hub-Signature-256: ${SIG}" \
             -d "${BODY}" \
-            "${REDMINE_URL}/devops/webhook/github/${DEVOPS_PROJECT_ID}/test_results"
+            "${REDMINE_URL}/devops/webhook/github/${DEVOPS_PROJECT_ID}/test_results" || true)"
+
+          echo "DevOps ingest HTTP status: ${HTTP_CODE}"
+          if [ "${HTTP_CODE}" != "200" ] && [ "${HTTP_CODE}" != "201" ]; then
+            echo "::warning::Redmineflux DevOps test-results upload failed (HTTP ${HTTP_CODE})."
+            if [ -s "${RESP_FILE}" ]; then
+              echo "---- DevOps ingest response body ----"
+              cat "${RESP_FILE}"
+              echo "-------------------------------------"
+            fi
+            exit 0
+          fi
+
+          echo "Redmineflux DevOps test-results upload succeeded."
 
       # 📦 Always upload artifacts (even if tests fail)
       - name: Upload artifacts
