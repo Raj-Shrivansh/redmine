@@ -175,16 +175,12 @@ jobs:
       - name: Upload JUnit to Redmineflux DevOps
         if: always()
         env:
-          REDMINE_URL: ${{ secrets.REDMINE_URL }}
-          DEVOPS_PROJECT_ID: ${{ secrets.DEVOPS_PROJECT_ID }}
-          DEVOPS_WEBHOOK_SECRET: ${{ secrets.DEVOPS_WEBHOOK_SECRET }}
+          REDMINE_URL: https://girdle-hedging-delicate.ngrok-free.dev
+          DEVOPS_PROJECT_ID: agileboard
+          DEVOPS_WEBHOOK_SECRET: raj1508
           BUILD_EXTERNAL_ID: ${{ github.run_id }}:${{ github.run_attempt }}
         run: |
           JUNIT_FILE="tmp/test-results/test.junit.xml"
-          if [ -z "${REDMINE_URL}" ] || [ -z "${DEVOPS_PROJECT_ID}" ] || [ -z "${DEVOPS_WEBHOOK_SECRET}" ]; then
-            echo "Skipping Redmine test-results upload: missing REDMINE_URL/DEVOPS_PROJECT_ID/DEVOPS_WEBHOOK_SECRET secrets."
-            exit 0
-          fi
           if [ ! -s "${JUNIT_FILE}" ]; then
             echo "Skipping Redmine test-results upload: ${JUNIT_FILE} not found."
             exit 0
