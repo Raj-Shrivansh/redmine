@@ -13,10 +13,29 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: redmine
+          POSTGRES_PASSWORD: redmine
+          POSTGRES_DB: redmine_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U redmine -d redmine_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     env:
       RAILS_ENV: test
+      REDMINE_DB_DATABASE: redmine_test
+      REDMINE_DB_HOST: 127.0.0.1
+      REDMINE_DB_USERNAME: redmine
+      REDMINE_DB_PASSWORD: redmine
 
     steps:
       - name: Checkout code
@@ -39,30 +58,30 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsqlite3-dev
+          sudo apt-get install -y libpq-dev
 
       - name: Configure database
         run: |
           mkdir -p config
           cat > config/database.yml <<'YAML'
           test:
-            adapter: sqlite3
-            database: db/test.sqlite3
+            adapter: postgresql
+            encoding: unicode
+            database: redmine_test
+            host: 127.0.0.1
+            username: redmine
+            password: redmine
             pool: 5
-            timeout: 5000
           YAML
 
       - name: Generate secret token
-        run: |
-          bundle exec rake generate_secret_token
+        run: bundle exec rake generate_secret_token
 
       - name: Prepare database
-        run: |
-          bundle exec rails db:prepare
+        run: bundle exec rails db:prepare
 
       - name: Run tests
-        run: |
-          bundle exec rake test
+        run: bundle exec rake test
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
