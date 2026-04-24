@@ -7,12 +7,13 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-queue-demo
-  cancel-in-progress: false
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     env:
       RAILS_ENV: test
@@ -21,10 +22,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 🧠 Ensure lockfile works on Linux (fails fast if not fixed)
       - name: Check Gemfile.lock platform
         run: |
-          if ! grep -q "x86_64-linux" Gemfile.lock; then
+          if [ -f Gemfile.lock ] && ! grep -q "x86_64-linux" Gemfile.lock; then
             echo "❌ Gemfile.lock missing x86_64-linux platform"
             echo "Run locally: bundle lock --add-platform x86_64-linux"
             exit 1
@@ -43,18 +43,27 @@ jobs:
 
       - name: Configure database
         run: |
-          cp config/database.yml.example config/database.yml
+          mkdir -p config
+          cat > config/database.yml <<'YAML'
+          test:
+            adapter: sqlite3
+            database: db/test.sqlite3
+            pool: 5
+            timeout: 5000
+          YAML
 
       - name: Generate secret token
-        run: bundle exec rake generate_secret_token
+        run: |
+          bundle exec rake generate_secret_token
 
       - name: Prepare database
-        run: bundle exec rails db:prepare
+        run: |
+          bundle exec rails db:prepare
 
       - name: Run tests
-        run: bundle exec rake test
+        run: |
+          bundle exec rake test
 
-      # 📦 Always upload artifacts (even if tests fail)
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -65,3 +74,4 @@ jobs:
             tmp/
             coverage/
             test/reports/
+          if-no-files-found: ignore
